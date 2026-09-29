@@ -27,6 +27,48 @@ use crate::{
     utils,
 };
 
+use std::path::{Path};
+use std::process::Command;
+
+fn get_ffmpeg_path() -> &'static str {
+    // 根据操作系统返回不同路径
+    #[cfg(target_os = "windows")]
+    { r"C:\Program Files\ffmpeg\bin\ffmpeg.exe" }
+
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    { "/usr/local/bin/ffmpeg" }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    { "/opt/homebrew/bin/ffmpeg" }
+
+    #[cfg(target_os = "linux")]
+    { "/usr/bin/ffmpeg" }
+}
+
+fn m4a_to_mp3(input: &Path, output: &Path) -> bool {
+    let ffmpeg = get_ffmpeg_path();
+    let mut cmd = Command::new(ffmpeg);
+    cmd.arg("-i").arg(input)
+        .args(["-vn", "-acodec", "libmp3lame", "-ab", "192k"])
+        .arg(output);
+
+    // Windows 上禁止弹出命令行窗口
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    match cmd.status() {
+        Ok(status) => status.success(),
+        Err(e) => {
+            tracing::warn!(ffmpeg_path = ffmpeg, error = %e);
+            false
+        }
+    }
+}
+
 const CHUNK_SIZE: u64 = 2 * 1024 * 1024; // 2MB
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
@@ -428,6 +470,12 @@ impl AudioTask {
         ))?;
 
         download_task.update_progress(|p| p.audio_task.completed = true);
+
+        // 某些设备不支持 m4a 音频, 将原音频 m4a 格式转换成 mp3 格式
+        let mp3_path = m4a_path.with_extension("mp3");
+        tracing::info!("m4a to mp3 staring");
+        m4a_to_mp3(&m4a_path, &mp3_path);
+        tracing::info!("m4a to mp3 ending");
 
         Ok(())
     }
